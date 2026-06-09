@@ -8,6 +8,7 @@ import { KVEntry } from "@/types/KVEntry"
 import { mixStores } from "@priolo/jon"
 import { KVEntriesState, KVEntriesStore } from "."
 import { binaryStringToString, stringToBinaryString } from "../../../utils/string"
+import { MSG_FORMAT, toFormat } from "../../../utils/editor"
 import editorSetup, { EditorState, EditorStore } from "../editorBase"
 import loadBaseSetup, { LoadBaseState, LoadBaseStore } from "../loadBase"
 
@@ -52,8 +53,18 @@ const setup = {
 		},
 		//#endregion
 
-		getEditorText: (_: void, store?: ViewStore) => 
-			binaryStringToString((<KVEntryStore>store).getKVSelect()?.payload ?? ""),
+		getEditorText: (_: void, store?: ViewStore) => {
+			const kventryStore = <KVEntryStore>store
+			const text = binaryStringToString(kventryStore.getKVSelect()?.payload ?? "")
+			const s = kventryStore.state
+			if (s.autoFormat && s.editState === EDIT_STATE.READ) {
+				const fmt = (s.format ?? MSG_FORMAT.JSON) as MSG_FORMAT
+				if (fmt !== MSG_FORMAT.HEX && fmt !== MSG_FORMAT.BASE64) {
+					try { return toFormat(text, fmt) } catch { return text }
+				}
+			}
+			return text
+		},
 
 
 		// [II] TODO
@@ -90,6 +101,7 @@ const setup = {
 			const s = <KVEntryStore>store
 			const kventry = await kventryApi.get(s.state.connectionId, s.state.bucket.bucket, s.state.kventry.key, { store, manageAbort: true })
 			s.setKVEntry(kventry)
+			s.formatIfNeeded()
 			await loadBaseSetup.actions.fetch(_, store)
 		},
 		//#endregion
@@ -146,6 +158,22 @@ const setup = {
 				...store.state.kventry, 
 				payload: stringToBinaryString(text) }
 			)
+		},
+
+		/** Formats the current payload and updates the store when autoFormat is enabled in READ mode. */
+		formatIfNeeded(_: void, store?: KVEntryStore) {
+			const s = store.state
+			if (!s.autoFormat || s.editState !== EDIT_STATE.READ) return
+			const fmt = (s.format ?? MSG_FORMAT.JSON) as MSG_FORMAT
+			if (fmt === MSG_FORMAT.HEX || fmt === MSG_FORMAT.BASE64) return
+			const rawText = binaryStringToString(store.getKVSelect()?.payload ?? "")
+			if (!rawText) return
+			try {
+				const formatted = toFormat(rawText, fmt)
+				if (formatted !== rawText) store.setEditorText(formatted)
+			} catch {
+				// Invalid content (e.g. not valid JSON), skip formatting
+			}
 		}
 	},
 
